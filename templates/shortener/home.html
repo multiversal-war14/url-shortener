@@ -1,0 +1,84 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Django URL Shortener</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 700px;
+            margin: 70px auto;
+            padding: 20px;
+            background: #f4f6f9;
+            color: #202938;
+        }
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+        }
+        input {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 12px;
+            margin: 12px 0;
+        }
+        button {
+            padding: 12px 20px;
+            cursor: pointer;
+        }
+        .result {
+            margin-top: 24px;
+            overflow-wrap: anywhere;
+        }
+        .error {
+            color: #b91c1c;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>URL Shortener</h1>
+        <p>Turn a long URL into a short, shareable link.</p>
+
+        <form method="post">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+           <div class="error">
+              {% for error in form.non_field_errors %}
+                  <p>{{ error }}</p>
+                  {% endfor %}
+             </div>
+             {% endif %}
+
+            <label for="{{ form.original_url.id_for_label }}">Long URL:</label>
+            {{ form.original_url }}
+            {% for error in form.original_url.errors %}
+                <p class="error">{{ error }}</p>
+            {% endfor %}
+
+            <label for="{{ form.custom_alias.id_for_label }}">Custom alias (optional):</label>
+            {{ form.custom_alias }}
+            {% for error in form.custom_alias.errors %}
+                <p class="error">{{ error }}</p>
+            {% endfor %}
+
+            <label for="{{ form.expiry_hours.id_for_label }}">Expiry in hours (optional):</label>
+            {{ form.expiry_hours }}
+            {% for error in form.expiry_hours.errors %}
+                <p class="error">{{ error }}</p>
+            {% endfor %}
+
+            <button type="submit">Shorten URL</button>
+        </form>
+
+        {% if short_url %}
+            <div class="result">
+                <h2>Your short link</h2>
+                <a href="{{ short_url }}">{{ short_url }}</a>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>
