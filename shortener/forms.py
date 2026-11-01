@@ -1,7 +1,11 @@
 
+import ipaddress
 import re
+from urllib.parse import urlsplit
 
 from django import forms
+from django.conf import settings
+
 from .models import ShortURL
 
 
@@ -12,6 +16,96 @@ RESERVED_CODES = {
     "media",
     "favicon.ico",
 }
+
+INTERNAL_HOSTNAMES = {
+    "localhost",
+    "localhost.localdomain",
+    "metadata.google.internal",
+}
+
+INTERNAL_SUFFIXES = (
+    ".localhost",
+    ".local",
+    ".internal",
+    ".lan",
+    ".home",
+    ".test",
+)
+
+
+def validate_destination_url(url):
+    try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname
+
+        # Only HTTP and HTTPS are allowed.
+        if parsed.scheme.lower() not in ("http", "https"):
+            raise forms.ValidationError(
+                "Only HTTP and HTTPS URLs are allowed."
+            )
+
+        if not hostname:
+            raise forms.ValidationError(
+                "Please enter a valid destination URL."
+            )
+
+        # Reject malformed ports.
+        try:
+            parsed.port
+        except ValueError:
+            raise forms.ValidationError(
+                "Please enter a valid destination URL."
+            )
+
+        hostname = hostname.rstrip(".").lower()
+
+        # Reject localhost and common internal hostnames.
+        if hostname in INTERNAL_HOSTNAMES or any(
+            hostname.endswith(suffix)
+            for suffix in INTERNAL_SUFFIXES
+        ):
+            raise forms.ValidationError(
+                "Internal or localhost destinations are not allowed."
+            )
+
+        # If the hostname is an IP address, allow only globally
+        # routable public IP addresses.
+        try:
+            ip = ipaddress.ip_address(hostname)
+
+            if not ip.is_global:
+                raise forms.ValidationError(
+                    "Private, reserved and internal IP addresses "
+                    "are not allowed."
+                )
+
+        except ValueError:
+            # It is a hostname rather than an IP address.
+            pass
+
+        # Prevent links pointing back to this shortener service.
+        public_base_url = getattr(
+            settings,
+            "SHORTENER_PUBLIC_BASE_URL",
+            ""
+        )
+
+        if public_base_url:
+            service_hostname = urlsplit(
+                public_base_url
+            ).hostname
+
+            if service_hostname and (
+                hostname == service_hostname.rstrip(".").lower()
+            ):
+                raise forms.ValidationError(
+                    "Redirects to this URL shortener are not allowed."
+                )
+
+    except ValueError:
+        raise forms.ValidationError(
+            "Please enter a valid destination URL."
+        )
 
 
 class ShortURLForm(forms.Form):
@@ -53,20 +147,7 @@ class ShortURLForm(forms.Form):
 
     def clean_original_url(self):
         url = self.cleaned_data["original_url"]
-
-        from urllib.parse import urlsplit
-        parsed = urlsplit(url)
-
-        if parsed.scheme not in ("http", "https"):
-            raise forms.ValidationError(
-                "Only HTTP and HTTPS URLs are allowed."
-            )
-
-        if not parsed.hostname:
-            raise forms.ValidationError(
-                "Please enter a valid destination URL."
-            )
-
+        validate_destination_url(url)
         return url
 
     def clean_custom_alias(self):
@@ -77,7 +158,7 @@ class ShortURLForm(forms.Form):
 
         if not re.fullmatch(r"[A-Za-z0-9_-]{3,12}", alias):
             raise forms.ValidationError(
-                "Use 3–12 letters, numbers, hyphens or underscores."
+                "Use 3-12 letters, numbers, hyphens or underscores."
             )
 
         if alias.lower() in RESERVED_CODES:

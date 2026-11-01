@@ -1,124 +1,213 @@
-
+import json
 import re
+import secrets
 import time
-import urllib.request
+import urllib.error
 import urllib.parse
+import urllib.request
 import http.cookiejar
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
-BASE_URL = "http://127.0.0.1:8000/"
+BASE_URL = "http://127.0.0.1:8000"
+CONCURRENT_REQUESTS = 200
+TIMEOUT = 90
 
 
-def send_request(original_url, alias=""):
-    start = time.time()
+def make_opener():
+    cookies = http.cookiejar.CookieJar()
+    return urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(cookies)
+    )
+
+
+def get_csrf(opener):
+    request = urllib.request.Request(BASE_URL + "/")
+    with opener.open(request, timeout=TIMEOUT) as response:
+        html = response.read().decode("utf-8", errors="replace")
+
+    match = re.search(
+        r'name="csrfmiddlewaretoken"\s+value="([^"]+)"',
+        html
+    )
+    if not match:
+        raise RuntimeError("Could not find CSRF token on homepage.")
+
+    return match.group(1)
+
+
+def submit_link(original_url, alias=None, barrier=None):
+    opener = make_opener()
 
     try:
-        # Each worker gets its own cookies and CSRF token.
-        cookies = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(cookies)
-        )
+        csrf = get_csrf(opener)
 
-        # Load homepage and obtain CSRF token.
-        response = opener.open(BASE_URL)
-        page = response.read().decode("utf-8")
+        if barrier:
+            barrier.wait(timeout=TIMEOUT)
 
-        match = re.search(
-            r'name="csrfmiddlewaretoken"\s+value="([^"]+)"',
-            page
-        )
-
-        if not match:
-            return False, "CSRF token not found", 0
-
-        csrf_token = match.group(1)
-
-        # Submit the form.
-        data = urllib.parse.urlencode({
-            "csrfmiddlewaretoken": csrf_token,
+        data = {
             "original_url": original_url,
-            "custom_alias": alias,
+            "custom_alias": alias or "",
             "expiry_hours": "",
-        }).encode()
+            "csrfmiddlewaretoken": csrf,
+        }
 
         request = urllib.request.Request(
-            BASE_URL,
-            data=data,
+            BASE_URL + "/",
+            data=urllib.parse.urlencode(data).encode(),
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
-                "Referer": BASE_URL,
+                "Referer": BASE_URL + "/",
             },
-            method="POST",
         )
 
-        response = opener.open(request)
-        result = response.read().decode("utf-8")
-        status = response.status
+        start = time.perf_counter()
 
-        success = "Your short link" in result
+        try:
+            with opener.open(request, timeout=TIMEOUT) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                status = response.status
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            status = error.code
 
-        return success, status, round(time.time() - start, 3)
+        elapsed = time.perf_counter() - start
 
-    except urllib.error.HTTPError as error:
-        return False, error.code, round(time.time() - start, 3)
+        # The app displays the generated absolute short URL in the page.
+        match = re.search(
+            re.escape(BASE_URL) + r"/([A-Za-z0-9_-]{3,12})/",
+            body
+        )
+
+        return {
+            "status": status,
+            "success": bool(match),
+            "code": match.group(1) if match else None,
+            "time": elapsed,
+        }
 
     except Exception as error:
-        return False, str(error), round(time.time() - start, 3)
+        return {
+            "status": "ERROR",
+            "success": False,
+            "code": None,
+            "time": 0,
+            "error": str(error),
+        }
 
 
-def run_test(name, requests):
-    print(f"\n{'=' * 50}")
-    print(name)
-    print("=" * 50)
-
-    results = []
-
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        futures = [
-            executor.submit(send_request, url, alias)
-            for url, alias in requests
-        ]
-
-        for future in as_completed(futures):
-            results.append(future.result())
-
-    successes = sum(1 for result in results if result[0])
-    failures = len(results) - successes
-
-    times = [
-        result[2]
-        for result in results
-        if isinstance(result[2], float)
+def run_concurrent_creations():
+    barrier = Barrier(CONCURRENT_REQUESTS)
+    urls = [
+        f"https://example.com/load-test/{secrets.token_hex(8)}"
+        for _ in range(CONCURRENT_REQUESTS)
     ]
 
+    start = time.perf_counter()
+
+    with ThreadPoolExecutor(max_workers=CONCURRENT_REQUESTS) as executor:
+        futures = [
+            executor.submit(submit_link, url, None, barrier)
+            for url in urls
+        ]
+        results = [future.result() for future in futures]
+
+    print("\nTEST 1: 200 CONCURRENT DIFFERENT URLS")
     print("Total requests:", len(results))
-    print("Successful:", successes)
-    print("Failed:", failures)
+    print("Successful:", sum(r["success"] for r in results))
+    print("Failed:", sum(not r["success"] for r in results))
+    print("Unique generated codes:", len({
+        r["code"] for r in results if r["code"]
+    }))
+    print("Total elapsed time:", round(time.perf_counter() - start, 2), "seconds")
 
-    if times:
-        print("Average response time:", round(sum(times) / len(times), 3), "seconds")
-        print("Maximum response time:", max(times), "seconds")
+    successful_codes = [r["code"] for r in results if r["success"]]
+    return successful_codes
 
-    print("\nResponse details:")
-    for result in results:
-        print(result)
+
+def run_alias_race():
+    alias = "race" + secrets.token_hex(4)
+    barrier = Barrier(CONCURRENT_REQUESTS)
+
+    start = time.perf_counter()
+
+    with ThreadPoolExecutor(max_workers=CONCURRENT_REQUESTS) as executor:
+        futures = [
+            executor.submit(
+                submit_link,
+                f"https://example.com/alias-race/{i}",
+                alias,
+                barrier,
+            )
+            for i in range(CONCURRENT_REQUESTS)
+        ]
+        results = [future.result() for future in futures]
+
+    successes = sum(r["success"] for r in results)
+
+    print("\nTEST 2: 200 REQUESTS COMPETING FOR ONE ALIAS")
+    print("Alias:", alias)
+    print("Total requests:", len(results))
+    print("Successful creations:", successes)
+    print("Rejected requests:", len(results) - successes)
+    print("Total elapsed time:", round(time.perf_counter() - start, 2), "seconds")
+    print("Expected successful creations: 1")
+
+
+def run_concurrent_clicks(code):
+    # Do not follow redirects: we only need to verify the shortener's 302 response.
+    class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    opener = urllib.request.build_opener(NoRedirectHandler())
+    barrier = Barrier(CONCURRENT_REQUESTS)
+
+    def click():
+        try:
+            barrier.wait(timeout=TIMEOUT)
+            request = urllib.request.Request(BASE_URL + f"/{code}/")
+
+            try:
+                with opener.open(request, timeout=TIMEOUT) as response:
+                    return response.status
+            except urllib.error.HTTPError as error:
+                return error.code
+        except Exception as error:
+            return str(error)
+
+    start = time.perf_counter()
+
+    with ThreadPoolExecutor(max_workers=CONCURRENT_REQUESTS) as executor:
+        futures = [executor.submit(click) for _ in range(CONCURRENT_REQUESTS)]
+        statuses = [future.result() for future in futures]
+
+    try:
+        with urllib.request.urlopen(
+            BASE_URL + f"/{code}/analytics/",
+            timeout=TIMEOUT
+        ) as response:
+            analytics = json.loads(response.read().decode())
+            total_clicks = analytics["total_clicks"]
+    except Exception as error:
+        total_clicks = f"Could not read analytics: {error}"
+
+    print("\nTEST 3: 200 CONCURRENT CLICKS")
+    print("Total requests:", len(statuses))
+    print("Successful redirects (HTTP 302):", statuses.count(302))
+    print("Other responses:", len(statuses) - statuses.count(302))
+    print("Analytics total_clicks:", total_clicks)
+    print("Expected click count: 200")
+    print("Total elapsed time:", round(time.perf_counter() - start, 2), "seconds")
 
 
 if __name__ == "__main__":
+    print("Starting 200-request concurrency tests...")
+    codes = run_concurrent_creations()
+    run_alias_race()
 
-    # Test 1: 50 different URLs.
-    different_urls = [
-        (f"https://example.com/page/{i}", "")
-        for i in range(50)
-    ]
-
-    run_test("TEST 1: 50 CONCURRENT DIFFERENT URLS", different_urls)
-
-    # Test 2: 20 requests competing for the same alias.
-    same_alias = [
-        (f"https://example.com/alias-test/{i}", "sharedtest")
-        for i in range(20)
-    ]
-
-    run_test("TEST 2: 20 REQUESTS FOR THE SAME ALIAS", same_alias)
+    if codes:
+        run_concurrent_clicks(codes[0])
+    else:
+        print("\nSkipping click test: no short link was created.")

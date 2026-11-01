@@ -74,9 +74,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+        "OPTIONS": {
+            "timeout": 60,
+        },
     }
 }
 
@@ -126,5 +129,9 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
-SHORTENER_RATE_LIMIT = 3
+SHORTENER_RATE_LIMIT = 500
 SHORTENER_RATE_WINDOW = 60
+SHORTENER_REDIRECT_CACHE_TIMEOUT = 300
+SHORTENER_RATE_LIMIT = 500
+SHORTENER_RATE_WINDOW = 60
+SHORTENER_PUBLIC_BASE_URL = ""
