@@ -1,8 +1,15 @@
+
 # Django URL Shortener
 
 A Django-based URL shortening application that allows users to create short URLs, redirect visitors to their original destinations, and track link analytics.
 
-The project includes custom aliases, URL expiry, click tracking, caching, rate limiting, destination validation, concurrent request handling, and Docker configuration.
+The application includes custom aliases, URL expiry, click tracking, caching, rate limiting, destination validation, concurrent request handling, PostgreSQL, Redis, and Docker-based deployment.
+
+**Live Application:** http://13.239.21.206
+
+**GitHub Repository:** https://github.com/multiversal-war14/url-shortener
+
+> Note: The current public deployment uses HTTP. HTTPS has not yet been configured.
 
 ## 1. Features
 
@@ -13,16 +20,18 @@ The project includes custom aliases, URL expiry, click tracking, caching, rate l
 - Redirect users to original URLs.
 - Track total clicks and individual click events.
 - Display daily click statistics and referrer information.
-- Set expiry dates for short URLs.
+- Set expiry times for short URLs.
 - Validate destination URLs.
 - Reject unsupported URL schemes and known internal destinations.
 - Apply configurable rate limiting.
 - Cache redirect lookups to improve response times.
 - Invalidate cached entries when URLs are created or updated.
 - Provide HTML pages for URL creation and analytics.
-- Support SQLite for local development and PostgreSQL configuration.
+- Support SQLite for local development.
+- Support PostgreSQL for deployment.
 - Support Redis caching.
 - Include Docker and Docker Compose configuration.
+- Deploy using Gunicorn and WhiteNoise.
 
 ## 2. Technology Stack
 
@@ -31,15 +40,16 @@ The project includes custom aliases, URL expiry, click tracking, caching, rate l
 | Python | Programming language |
 | Django | Backend framework |
 | SQLite | Local development database |
-| PostgreSQL | Production database configuration |
+| PostgreSQL | Production database |
 | Django Cache | Redirect caching |
-| Redis | Optional shared cache |
+| Redis | Shared cache backend |
 | Waitress | Local concurrent request testing |
 | Gunicorn | Production WSGI server |
 | WhiteNoise | Static file serving |
 | HTML and CSS | Frontend |
 | Docker | Containerization |
 | Docker Compose | Multi-container configuration |
+| AWS EC2 | Cloud deployment |
 
 ## 3. Project Structure
 
@@ -118,6 +128,14 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+Copy the example environment file:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Configure the required environment variables before running the application.
+
 Apply database migrations:
 
 ```powershell
@@ -146,37 +164,37 @@ http://127.0.0.1:8000/
 
 The application supports environment-based configuration.
 
-Copy the example environment file:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Configure the environment variables before running the application.
-
-Important settings include:
+Important environment variables include:
 
 | Variable | Purpose |
 |---|---|
-| SECRET_KEY | Django secret key |
-| DEBUG | Enables or disables debug mode |
-| ALLOWED_HOSTS | Permitted hostnames |
-| CSRF_TRUSTED_ORIGINS | Trusted CSRF origins |
+| DJANGO_SECRET_KEY | Django secret key |
+| DJANGO_DEBUG | Enables or disables debug mode |
+| DJANGO_ALLOWED_HOSTS | Permitted hostnames |
+| DJANGO_CSRF_TRUSTED_ORIGINS | Trusted CSRF origins |
+| DJANGO_CSRF_COOKIE_SECURE | Controls secure CSRF cookies |
+| DJANGO_SECURE_SSL_REDIRECT | Controls HTTPS redirection |
 | DB_ENGINE | Database backend |
-| DB_NAME | Database name |
-| DB_USER | Database username |
-| DB_PASSWORD | Database password |
-| DB_HOST | Database hostname |
-| DB_PORT | Database port |
+| POSTGRES_DB | PostgreSQL database name |
+| POSTGRES_USER | PostgreSQL username |
+| POSTGRES_PASSWORD | PostgreSQL password |
+| POSTGRES_HOST | PostgreSQL hostname |
+| POSTGRES_PORT | PostgreSQL port |
 | REDIS_URL | Redis connection URL |
-| SHORTENER_RATE_LIMIT | Maximum requests in a rate-limit window |
+| SHORTENER_RATE_LIMIT | Maximum requests per rate-limit window |
 | SHORTENER_RATE_WINDOW | Rate-limit window in seconds |
-| REDIRECT_CACHE_TIMEOUT | Redirect cache duration |
-| PUBLIC_BASE_URL | Public URL of the deployed application |
+| SHORTENER_REDIRECT_CACHE_TIMEOUT | Redirect cache duration |
+| SHORTENER_PUBLIC_BASE_URL | Public URL of the application |
 
-Do not commit `.env` or real credentials to GitHub.
+The local development configuration uses SQLite. PostgreSQL and Redis are configured for deployment through environment variables.
 
-The local development configuration uses SQLite. PostgreSQL and Redis can be configured through environment variables.
+**Security considerations:**
+
+- Never commit `.env` or real credentials to GitHub.
+- Keep Django secret keys and database passwords private.
+- Use `.env.example` to document required variables without exposing actual secrets.
+- Set `DEBUG=0` or its corresponding Django environment setting for deployment.
+- Restrict SSH access to trusted IP addresses.
 
 ## 6. Application Usage
 
@@ -185,7 +203,7 @@ The local development configuration uses SQLite. PostgreSQL and Redis can be con
 1. Open the homepage.
 2. Enter the original destination URL.
 3. Optionally provide a custom alias.
-4. Optionally configure an expiry date.
+4. Optionally configure an expiry time in hours.
 5. Submit the form.
 6. The application generates a short URL.
 
@@ -204,7 +222,17 @@ The application tracks:
 - Daily click counts.
 - Referrer information.
 
-Analytics are available through the application's URL statistics functionality.
+Analytics are available through:
+
+```text
+/<short_code>/analytics/
+```
+
+Example:
+
+```text
+http://13.239.21.206/mytest/analytics/
+```
 
 ## 7. Database and Concurrency Handling
 
@@ -232,7 +260,7 @@ SQLite is used for local development.
 
 SQLite can experience write contention under heavy concurrent workloads. The application includes retry handling for certain SQLite lock errors.
 
-PostgreSQL is configured as an alternative database backend for deployment. Multi-instance PostgreSQL behavior has not yet been verified through a production deployment.
+PostgreSQL is used for the cloud deployment.
 
 ## 8. Caching
 
@@ -248,7 +276,7 @@ When a short URL is requested:
 
 Cache entries are invalidated when relevant URL records are created or changed.
 
-Redis can be configured as a shared cache backend.
+Redis is configured as the shared cache backend in the Docker deployment.
 
 ### Cache Benchmark
 
@@ -352,21 +380,13 @@ Run the test suite:
 python manage.py test shortener
 ```
 
-Latest verified result:
-
-```text
-Found 8 test(s).
-
-Ran 8 tests
-
-OK
-```
-
 Run Django's system checks:
 
 ```powershell
 python manage.py check
 ```
+
+The test suite has been run successfully during development.
 
 ## 12. Docker Configuration
 
@@ -374,55 +394,132 @@ The project includes:
 
 - A Dockerfile for building the Django application image.
 - A Docker Compose configuration for the web application, PostgreSQL, and Redis.
-- Persistent database and static-file volumes.
+- Persistent PostgreSQL storage through a Docker volume.
 - Environment-based application configuration.
 - Gunicorn as the application server.
+- WhiteNoise for static file serving.
 
-Build and start the containers:
+### Build and Start Containers
 
-```powershell
-docker compose up --build
+Create and configure the `.env` file before starting the containers.
+
+Build and start:
+
+```bash
+docker compose up -d --build
 ```
 
-Stop the containers:
+Check container status:
 
-```powershell
+```bash
+docker compose ps
+```
+
+View application logs:
+
+```bash
+docker compose logs web
+```
+
+Run migrations manually if needed:
+
+```bash
+docker compose exec web python manage.py migrate
+```
+
+Stop containers:
+
+```bash
 docker compose down
 ```
 
-The Docker configuration has been prepared but has not been executed or verified in this development environment.
+The PostgreSQL data volume is retained when containers are stopped and removed with `docker compose down`. Do not use `docker compose down -v` unless you intentionally want to delete the database volume.
 
-## 13. Deployment Status
+## 13. AWS EC2 Deployment
 
-The application includes configuration intended to support deployment using PostgreSQL, Redis, Gunicorn, WhiteNoise, and Docker.
+The application has been deployed to an AWS EC2 instance using Docker Compose.
 
-However, a cloud deployment has not yet been completed or verified.
+### Deployment Architecture
 
-The following items remain to be verified:
+The deployment consists of three containers:
 
-- Successful Docker image build.
-- Successful Docker Compose startup.
-- PostgreSQL persistence and migrations.
-- Redis shared caching.
-- Production environment variables and secrets.
-- Public deployment URL.
-- Production security and HTTPS configuration.
-- Load testing against the deployed application.
+| Service | Technology | Purpose |
+|---|---|---|
+| Web | Django + Gunicorn | Application and HTTP requests |
+| Database | PostgreSQL 17 | Persistent application data |
+| Cache | Redis 7 | Shared caching |
 
-No public production URL is currently claimed.
+### Deployment Steps
+
+1. Launch an Amazon EC2 instance.
+2. Configure SSH access through the EC2 security group.
+3. Install Docker and Docker Compose.
+4. Clone the GitHub repository.
+5. Create and configure the production `.env` file.
+6. Build and start the Docker containers.
+7. Run database migrations.
+8. Verify the web, PostgreSQL, and Redis services.
+9. Access the application through the EC2 public IP.
+
+Build and start the deployment:
+
+```bash
+docker compose up -d --build
+```
+
+Verify services:
+
+```bash
+docker compose ps
+```
+
+Check Django configuration:
+
+```bash
+docker compose exec web python manage.py check
+```
+
+### Live Deployment
+
+**Public Application URL:**
+
+http://13.239.21.206
+
+The application has been accessed successfully through the public URL.
+
+The following functionality has been manually verified on the deployed application:
+
+- Homepage loads successfully.
+- Short URL creation works.
+- Generated short URLs redirect to their destinations.
+- Custom aliases work.
+- Expiry settings can be submitted.
+- Analytics endpoint returns click information.
+- PostgreSQL and Redis containers are running and healthy.
+
+### Deployment Security
+
+- Django debug mode is disabled.
+- Environment variables are used for sensitive configuration.
+- SSH access is restricted to the configured source IP.
+- HTTP traffic is allowed through port 80.
+- PostgreSQL and Redis are accessed through the Docker network rather than exposed publicly.
+
+**Current limitation:** The public deployment uses HTTP rather than HTTPS. HTTPS, SSL certificate configuration, and production HSTS enforcement remain future improvements.
 
 ## 14. Known Limitations and Future Improvements
 
 Potential improvements include:
 
 - DNS resolution-based validation of destination IP addresses.
-- Production testing with PostgreSQL.
-- Shared Redis cache verification across multiple application instances.
-- Docker build and deployment verification.
-- Cloud deployment and production monitoring.
+- HTTPS configuration with an SSL certificate.
+- Production security hardening and HSTS configuration.
+- Production monitoring and logging.
 - More extensive automated integration and failure tests.
 - Improved analytics filtering and visualization.
 - Additional performance testing under production-like workloads.
+- Verification of shared Redis caching across multiple application instances.
+- Testing PostgreSQL behavior under larger concurrent workloads.
 
 ## 15. Design Documentation
 
@@ -435,4 +532,7 @@ design_doc.md
 ## 16. Author
 
 **Project:** Django URL Shortener
+
 **Repository:** https://github.com/multiversal-war14/url-shortener
+
+**Live Application:** http://13.239.21.206
